@@ -9,7 +9,6 @@ markerConfigurations:
       "1": [-0.0262914,0.0509139,0.0402475]
       "2": [-0.0328889,-0.02757,0.0390601]
       "3": [0.0431307,-0.0331216,0.0388839]
-
   "1":
     numPoints: 6
     offset: [0.0, -0.01, -0.01]
@@ -119,4 +118,3 @@ objects:
 #     dynamicsConfiguration: 0
 #     initialPosition: [0, -1.0, 0]
 #     initialYaw: 0
-

@@ -8,8 +8,10 @@ import numpy as np
 import time
 from std_srvs.srv import Empty
 from crazyflie_driver.srv import *
-from crazyflie_driver.msg import TrajectoryPolynomialPiece
+from crazyflie_driver.msg import TrajectoryPolynomialPiece, FullState, Hover
 from tf import TransformListener
+from std_msgs.msg import Empty as Empty_msg
+import geometry_msgs.msg
 
 def arrayToGeometryPoint(a):
     return geometry_msgs.msg.Point(a[0], a[1], a[2])
@@ -54,6 +56,62 @@ class Crazyflie:
         rospy.wait_for_service(prefix + "/update_params")
         self.updateParamsService = rospy.ServiceProxy(prefix + "/update_params", UpdateParams)
 
+        ### added by The-SS begin
+        self.pubCmdFullState = rospy.Publisher(prefix + '/cmd_full_state', FullState, queue_size=1)
+        self.pubCmdStop = rospy.Publisher(prefix + '/cmd_stop', Empty_msg, queue_size=1)
+
+        self.worldFrame = '/world'
+        ### added by The-SS end
+
+    ### added by The-SS begin
+    def cmdStop(self):
+        '''
+        Cuts off power to the drone (instanteous effect)
+        '''
+        empty = Empty_msg()
+        self.pubCmdStop.publish(empty)
+
+    def cmdFullState(self, pose_data, twist_data, acc_data):
+        '''
+        pose_data: list/array with position and quaternion rotation (x, y, z, qx, qy, qz, qw)
+        twist_data: list/array with linear and angular velocities (vx, vy, vz, roll_rate, pitch_rate, yaw_rate)
+        acc_data: list/array with acceleration (ax, ay, az)
+        '''
+        state = FullState()
+        pose = geometry_msgs.msg.Pose()
+        twist = geometry_msgs.msg.Twist()
+        acc = geometry_msgs.msg.Vector3()
+
+        pose.position.x = pose_data[0]
+        pose.position.y = pose_data[1]
+        pose.position.z = pose_data[2]
+        pose.orientation.x = pose_data[3]
+        pose.orientation.y = pose_data[4]
+        pose.orientation.z = pose_data[5]
+        pose.orientation.w = pose_data[6]
+
+        twist.linear.x = twist_data[0]
+        twist.linear.y = twist_data[1]
+        twist.linear.z = twist_data[2]
+        twist.angular.x = twist_data[3]
+        twist.angular.y = twist_data[4]
+        twist.angular.z = twist_data[5]
+
+        acc.x = acc_data[0]
+        acc.y = acc_data[1]
+        acc.z = acc_data[2]
+
+        state.pose = pose
+        state.twist = twist
+        state.acc = acc
+        state.header.seq +=1
+        state.header.stamp = rospy.Time.now()
+        state.header.frame_id = self.worldFrame
+
+        self.pubCmdFullState.publish(state)
+
+    ### added by The-SS end
+
     def setGroupMask(self, groupMask):
         self.setGroupMaskService(groupMask)
 
@@ -89,6 +147,13 @@ class Crazyflie:
         self.tf.waitForTransform("/world", "/cf" + str(self.id), rospy.Time(0), rospy.Duration(10))
         position, quaternion = self.tf.lookupTransform("/world", "/cf" + str(self.id), rospy.Time(0))
         return np.array(position)
+
+    ### Added by The-SS begin
+    def rotation(self):
+        self.tf.waitForTransform("/world", "/cf" + str(self.id), rospy.Time(0), rospy.Duration(10))
+        position, quaternion = self.tf.lookupTransform("/world", "/cf" + str(self.id), rospy.Time(0))
+        return np.array(quaternion)
+    ### Added by The-SS end
 
     def getParam(self, name):
         return rospy.get_param(self.prefix + "/" + name)

@@ -130,6 +130,14 @@ class Crazyflie:
         pos = self._vposition()
         return np.array([pos.x, pos.y, pos.z])
 
+
+    ### Added by The-SS begin
+    # TODO: add support for cmdStop, cmdFullState, and cmdHover
+
+    def rotation(self): # always returns [0,0,0,1] #TODO: return rotation that takes yaw angle into account
+        return np.array([0,0,0,1])
+    ### Added by The-SS end
+
     def getParam(self, name):
         print("WARNING: getParam not implemented in simulation!")
 

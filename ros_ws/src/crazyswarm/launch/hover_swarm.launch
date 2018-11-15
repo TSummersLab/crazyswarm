@@ -4,6 +4,7 @@
 
   <rosparam command="load" file="$(find crazyswarm)/launch/crazyflieTypes.yaml" />
   <rosparam command="load" file="$(find crazyswarm)/launch/crazyflies.yaml" />
+  <rosparam command="load" file="$(find crazyswarm)/launch/object_tracker.yaml" />
 
   <node pkg="crazyswarm" type="crazyswarm_server" name="crazyswarm_server" output="screen" >
     <rosparam>
@@ -40,7 +41,7 @@
       # tracking
       motion_capture_type: "vicon" # one of none,vicon,optitrack,qualisys
       object_tracking_type: "libobjecttracker" # one of motionCapture,libobjecttracker
-      vicon_host_name: "vicon"
+      vicon_host_name: "10.0.0.4:801"
       # optitrack_local_ip: "localhost"
       # optitrack_server_ip: "optitrack"
       # qualisys_host_name: "10.0.5.219"
