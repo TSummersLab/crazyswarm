@@ -17,7 +17,7 @@ The experiments used for our "Robust 3D Distributed Formation Control with Colli
 #### Hardware Implementation
 On the hardware side, our implementation consisted of the following components:
 - VICON motion capture system:
-  Since the Crazyflie drones cannot perform the relative neighbor localization themselves, due to the lack of sensors and computational power, using an external motion capture system to locate the robots was inevitable. However, all control signal computations were performed using relative position measurements.
+  Since the Crazyflie drones cannot perform the relative neighbor localization themselves, due to the lack of sensors and computational power, using an external motion capture system to locate the robots was inevitable. However, once the global positions are found, the local position measurements relative to each agent are generated and used in the process of calculating the control signal.
 - Crazyflie quadrotors:
   The number of quadrotors used depends on the size of the formation. We tested out formations with 4, 5, 6, and 8 drones. As the number of drones increase, the rate at which the main loop runs becomes slower primarily due to the time it takes to issue control commands the drones.
 - Crazyradio radio transmitters:
@@ -36,9 +36,9 @@ To generate the data, the following files were used:
   Contains Matlab code to calculate the gains matrix
 - `<ros_ws>/src/crazyswarm/scripts/distributed_3d_form_ctrl_goto.py` and `<ros_ws>/src/crazyswarm/scripts/distributed_3d_form_ctrl_full_state.py`:
   These scripts perform the task of applying the formation control law through the following steps:
-  - Calculating the gains matrix
-  - Finding the global current location of the drones
-  - Transforming the positions to local relative coordinates.
+  - Calculating the gains matrix for a desired formation and sensing topology
+  - Finding the current global location of the Crazyflies
+  - Transforming the positions to local relative coordinates (for every agent, the location of its neighbors relative to itself are calculated)
   - Using the local coordinates to generate the control signal
   - Mapping the control signals back to the global frame
   - Issuing the control signal
