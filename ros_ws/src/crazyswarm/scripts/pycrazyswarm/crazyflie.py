@@ -6,12 +6,12 @@ import yaml
 import rospy
 import numpy as np
 import time
+import tf_conversions
 from std_srvs.srv import Empty
+import std_msgs
 from crazyflie_driver.srv import *
-from crazyflie_driver.msg import TrajectoryPolynomialPiece, FullState, Hover
+from crazyflie_driver.msg import TrajectoryPolynomialPiece, FullState
 from tf import TransformListener
-from std_msgs.msg import Empty as Empty_msg
-import geometry_msgs.msg
 
 def arrayToGeometryPoint(a):
     return geometry_msgs.msg.Point(a[0], a[1], a[2])
@@ -35,6 +35,7 @@ class Crazyflie:
     def __init__(self, id, initialPosition, tf):
         self.id = id
         prefix = "/cf" + str(id)
+        self.prefix = prefix
         self.initialPosition = np.array(initialPosition)
 
         self.tf = tf
@@ -56,61 +57,12 @@ class Crazyflie:
         rospy.wait_for_service(prefix + "/update_params")
         self.updateParamsService = rospy.ServiceProxy(prefix + "/update_params", UpdateParams)
 
-        ### added by The-SS begin
-        self.pubCmdFullState = rospy.Publisher(prefix + '/cmd_full_state', FullState, queue_size=1)
-        self.pubCmdStop = rospy.Publisher(prefix + '/cmd_stop', Empty_msg, queue_size=1)
+        self.cmdFullStatePublisher = rospy.Publisher(prefix + "/cmd_full_state", FullState, queue_size=1)
+        self.cmdFullStateMsg = FullState()
+        self.cmdFullStateMsg.header.seq = 0
+        self.cmdFullStateMsg.header.frame_id = "/world"
 
-        self.worldFrame = '/world'
-        ### added by The-SS end
-
-    ### added by The-SS begin
-    def cmdStop(self):
-        '''
-        Cuts off power to the drone (instanteous effect)
-        '''
-        empty = Empty_msg()
-        self.pubCmdStop.publish(empty)
-
-    def cmdFullState(self, pose_data, twist_data, acc_data):
-        '''
-        pose_data: list/array with position and quaternion rotation (x, y, z, qx, qy, qz, qw)
-        twist_data: list/array with linear and angular velocities (vx, vy, vz, roll_rate, pitch_rate, yaw_rate)
-        acc_data: list/array with acceleration (ax, ay, az)
-        '''
-        state = FullState()
-        pose = geometry_msgs.msg.Pose()
-        twist = geometry_msgs.msg.Twist()
-        acc = geometry_msgs.msg.Vector3()
-
-        pose.position.x = pose_data[0]
-        pose.position.y = pose_data[1]
-        pose.position.z = pose_data[2]
-        pose.orientation.x = pose_data[3]
-        pose.orientation.y = pose_data[4]
-        pose.orientation.z = pose_data[5]
-        pose.orientation.w = pose_data[6]
-
-        twist.linear.x = twist_data[0]
-        twist.linear.y = twist_data[1]
-        twist.linear.z = twist_data[2]
-        twist.angular.x = twist_data[3]
-        twist.angular.y = twist_data[4]
-        twist.angular.z = twist_data[5]
-
-        acc.x = acc_data[0]
-        acc.y = acc_data[1]
-        acc.z = acc_data[2]
-
-        state.pose = pose
-        state.twist = twist
-        state.acc = acc
-        state.header.seq +=1
-        state.header.stamp = rospy.Time.now()
-        state.header.frame_id = self.worldFrame
-
-        self.pubCmdFullState.publish(state)
-
-    ### added by The-SS end
+        self.cmdStopPublisher = rospy.Publisher(prefix + "/cmd_stop", std_msgs.msg.Empty, queue_size=1)
 
     def setGroupMask(self, groupMask):
         self.setGroupMaskService(groupMask)
@@ -148,13 +100,6 @@ class Crazyflie:
         position, quaternion = self.tf.lookupTransform("/world", "/cf" + str(self.id), rospy.Time(0))
         return np.array(position)
 
-    ### Added by The-SS begin
-    def rotation(self):
-        self.tf.waitForTransform("/world", "/cf" + str(self.id), rospy.Time(0), rospy.Duration(10))
-        position, quaternion = self.tf.lookupTransform("/world", "/cf" + str(self.id), rospy.Time(0))
-        return np.array(quaternion)
-    ### Added by The-SS end
-
     def getParam(self, name):
         return rospy.get_param(self.prefix + "/" + name)
 
@@ -166,6 +111,40 @@ class Crazyflie:
         for name, value in params.iteritems():
             rospy.set_param(self.prefix + "/" + name, value)
         self.updateParamsService(params.keys())
+
+    def cmdFullState(self, pos, vel, acc, yaw, omega):
+        self.cmdFullStateMsg.header.stamp = rospy.Time.now()
+        self.cmdFullStateMsg.header.seq += 1
+        self.cmdFullStateMsg.pose.position.x    = pos[0]
+        self.cmdFullStateMsg.pose.position.y    = pos[1]
+        self.cmdFullStateMsg.pose.position.z    = pos[2]
+        self.cmdFullStateMsg.twist.linear.x     = vel[0]
+        self.cmdFullStateMsg.twist.linear.y     = vel[1]
+        self.cmdFullStateMsg.twist.linear.z     = vel[2]
+        self.cmdFullStateMsg.acc.x              = acc[0]
+        self.cmdFullStateMsg.acc.y              = acc[1]
+        self.cmdFullStateMsg.acc.z              = acc[2]
+        self.cmdFullStateMsg.pose.orientation   = geometry_msgs.msg.Quaternion(*tf_conversions.transformations.quaternion_from_euler(0, 0, yaw))
+        self.cmdFullStateMsg.twist.angular.x    = omega[0]
+        self.cmdFullStateMsg.twist.angular.y    = omega[1]
+        self.cmdFullStateMsg.twist.angular.z    = omega[2]
+        self.cmdFullStatePublisher.publish(self.cmdFullStateMsg)
+
+    def cmdStop(self):
+        self.cmdStopPublisher.publish(std_msgs.msg.Empty())
+
+    #
+    # wrappers around the parameter setting system for common cases
+    #
+
+    # - this is a blocking command, so it may cause stability problems
+    #   for large swarms and/or high-frequency changes
+    # - parameter ring/effect must be set to 7 (solid color) to have any effect!
+    # - input should be floats in range [0, 1]
+    def setLEDColor(self, r, g, b):
+        self.setParam("ring/solidRed", int(r * 255))
+        self.setParam("ring/solidGreen", int(g * 255))
+        self.setParam("ring/solidBlue", int(b * 255))
 
 
 class CrazyflieServer:
@@ -179,8 +158,8 @@ class CrazyflieServer:
         self.landService = rospy.ServiceProxy("/land", Land)
         # rospy.wait_for_service("/stop")
         # self.stopService = rospy.ServiceProxy("/stop", Stop)
-        # rospy.wait_for_service("/go_to")
-        # self.goToService = rospy.ServiceProxy("/go_to", GoTo)
+        rospy.wait_for_service("/go_to")
+        self.goToService = rospy.ServiceProxy("/go_to", GoTo)
         rospy.wait_for_service("/start_trajectory");
         self.startTrajectoryService = rospy.ServiceProxy("/start_trajectory", StartTrajectory)
         # rospy.wait_for_service("/update_params")
@@ -212,9 +191,9 @@ class CrazyflieServer:
     # def stop(self, groupMask = 0):
     #     self.stopService(groupMask)
 
-    # def goTo(self, goal, yaw, duration, groupMask = 0):
-    #     gp = arrayToGeometryPoint(goal)
-    #     self.goToService(groupMask, True, gp, yaw, rospy.Duration.from_sec(duration))
+    def goTo(self, goal, yaw, duration, groupMask = 0):
+        gp = arrayToGeometryPoint(goal)
+        self.goToService(groupMask, True, gp, yaw, rospy.Duration.from_sec(duration))
 
     def startTrajectory(self, trajectoryId, timescale = 1.0, reverse = False, relative = True, groupMask = 0):
         self.startTrajectoryService(groupMask, trajectoryId, timescale, reverse, relative)

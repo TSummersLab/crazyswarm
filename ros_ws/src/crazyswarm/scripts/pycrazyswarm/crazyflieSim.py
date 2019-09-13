@@ -65,10 +65,14 @@ class Crazyflie:
         self.time = lambda: timeHelper.time()
 
         self.planner = firm.planner()
+        self.cmdHighLevel = True
         firm.plan_init(self.planner)
         self.planner.lastKnownPosition = arr2vec(initialPosition)
         self.groupMask = 0
         self.trajectories = dict()
+
+        # for visualization - default to blueish-grey
+        self.ledRGB = (0.5, 0.5, 1)
 
     def setGroupMask(self, groupMask):
         self.groupMask = groupMask
@@ -128,7 +132,9 @@ class Crazyflie:
 
     def position(self):
         pos = self._vposition()
-        return np.array([pos.x, pos.y, pos.z])
+        if not type(pos) is np.ndarray:
+            return np.array([pos.x, pos.y, pos.z])
+        return pos
 
 
     ### Added by The-SS begin
@@ -147,9 +153,17 @@ class Crazyflie:
     def setParams(self, params):
         print("WARNING: setParams not implemented in simulation!")
 
+    # - this is a part of the param system on the real crazyflie,
+    #   but we implement it in simulation too for debugging
+    # - is a blocking command on real CFs, so may cause stability problems
+    def setLEDColor(self, r, g, b):
+        self.ledRGB = (r, g, b)
+
     # simulation only functions
     def yaw(self):
         ev = firm.plan_current_goal(self.planner, self.time())
+        if not firm.is_traj_eval_valid(ev):
+            return 0.0
         return ev.yaw
 
     def acceleration(self):
@@ -176,6 +190,11 @@ class Crazyflie:
             roll = math.atan2(y_body[2], z_body[2])
             return (roll, pitch, yaw)
 
+    def cmdFullState(self, pos, vel, acc, yaw, omega):
+        self.planner.lastKnownPosition = pos
+        self.cmdHighLevel = False
+        # TODO store other state variables
+
     # "private" methods
     def _isGroup(self, groupMask):
         return groupMask == 0 or (self.groupMask & groupMask) > 0
@@ -183,7 +202,7 @@ class Crazyflie:
     def _vposition(self):
         # TODO this should be implemented in C
         # print(self.id, self.planner, self.planner.state)
-        if self.planner.state == firm.TRAJECTORY_STATE_IDLE:
+        if (not self.cmdHighLevel) or self.planner.state == firm.TRAJECTORY_STATE_IDLE:
             return self.planner.lastKnownPosition
         else:
             ev = firm.plan_current_goal(self.planner, self.time())

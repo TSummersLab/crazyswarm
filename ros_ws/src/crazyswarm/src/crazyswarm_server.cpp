@@ -15,27 +15,15 @@
 #include "crazyflie_driver/GoTo.h"
 #include "crazyflie_driver/StartTrajectory.h"
 #include "crazyflie_driver/SetGroupMask.h"
+#include "crazyflie_driver/FullState.h"
+#include "crazyflie_driver/Position.h"
 #include "std_srvs/Empty.h"
+#include <std_msgs/Empty.h>
 #include "geometry_msgs/Twist.h"
 #include "sensor_msgs/Imu.h"
 #include "sensor_msgs/Temperature.h"
 #include "sensor_msgs/MagneticField.h"
 #include "std_msgs/Float32.h"
-
-// Added by The-SS begin
-// Added to support more command types
-#include "crazyflie_driver/RemoveCrazyflie.h"
-#include "crazyflie_driver/Stop.h"
-#include "crazyflie_driver/sendPacket.h"
-#include "crazyflie_driver/FullState.h"
-#include "crazyflie_driver/Position.h"
-#include "crazyflie_driver/crtpPacket.h"
-#include "crazyflie_cpp/Crazyradio.h"
-#include "crazyflie_cpp/crtp.h"
-#include "geometry_msgs/PointStamped.h"
-#include <std_msgs/Empty.h>
-// Added by The-SS end
-
 
 #include <sensor_msgs/Joy.h>
 #include <sensor_msgs/PointCloud.h>
@@ -52,6 +40,7 @@
 #include <csignal> // or C++ style alternative
 
 // Motion Capture
+#include "libmotioncapture/testmocap.h"
 #ifdef ENABLE_VICON
 #include "libmotioncapture/vicon.h"
 #endif
@@ -63,6 +52,9 @@
 #endif
 #ifdef ENABLE_QUALISYS
 #include <libmotioncapture/qualisys.h>
+#endif
+#ifdef ENABLE_VRPN
+#include <libmotioncapture/vrpn.h>
 #endif
 
 // Object tracker
@@ -184,8 +176,11 @@ public:
     const std::vector<crazyflie_driver::LogBlock>& log_blocks,
     ros::CallbackQueue& queue,
     bool force_no_cache)
-    : m_cf(link_uri, rosLogger)
-    , m_tf_prefix(tf_prefix)
+    : m_tf_prefix(tf_prefix)
+    , m_cf(
+      link_uri,
+      rosLogger,
+      std::bind(&CrazyflieROS::onConsole, this, std::placeholders::_1))
     , m_frame(frame)
     , m_worldFrame(worldFrame)
     , m_enableParameters(enable_parameters)
@@ -202,12 +197,6 @@ public:
     , m_logBlocks(log_blocks)
     , m_forceNoCache(force_no_cache)
     , m_initializedPosition(false)
-    // Added by The-SS begin
-    , m_subscribeCmdFullState()
-    , m_subscribeCmdStop()
-    , m_sentSetpoint(false)
-    , m_isEmergency(false)
-    // Added by The-SS end
   {
     ros::NodeHandle n;
     n.setCallbackQueue(&queue);
@@ -218,10 +207,9 @@ public:
     m_serviceGoTo = n.advertiseService(tf_prefix + "/go_to", &CrazyflieROS::goTo, this);
     m_serviceSetGroupMask = n.advertiseService(tf_prefix + "/set_group_mask", &CrazyflieROS::setGroupMask, this);
 
-    // Added by The-SS begin
-    m_subscribeCmdFullState = n.subscribe(m_tf_prefix + "/cmd_full_state", 1, &CrazyflieROS::cmdFullStateSetpoint, this);
+    m_subscribeCmdPosition = n.subscribe(tf_prefix + "/cmd_position", 1, &CrazyflieROS::cmdPositionSetpoint, this);
+    m_subscribeCmdFullState = n.subscribe(tf_prefix + "/cmd_full_state", 1, &CrazyflieROS::cmdFullStateSetpoint, this);
     m_subscribeCmdStop = n.subscribe(m_tf_prefix + "/cmd_stop", 1, &CrazyflieROS::cmdStop, this);
-    // Added by The-SS end
 
     if (m_enableLogging) {
       m_logFile.open("logcf" + std::to_string(id) + ".csv");
@@ -242,56 +230,9 @@ public:
   {
     m_logBlocks.clear();
     m_logBlocksGeneric.clear();
-    m_cf.trySysOff();
+    // m_cf.trySysOff();
     m_logFile.close();
   }
-
-  // Added by The-SS begin
-  void cmdStop(
-    const std_msgs::Empty::ConstPtr& msg)
-  {
-     //ROS_INFO("got a stop setpoint");
-    if (!m_isEmergency) {
-      m_cf.sendStop();
-      // m_sentSetpoint = true;
-      //ROS_INFO("set a stop setpoint");
-    }
-  }
-
-  void cmdFullStateSetpoint(
-    const crazyflie_driver::FullState::ConstPtr& msg)
-  {
-    if (!m_isEmergency) {
-      //ROS_INFO("got a full state setpoint");
-      float x = msg->pose.position.x;
-      float y = msg->pose.position.y;
-      float z = msg->pose.position.z;
-      float vx = msg->twist.linear.x;
-      float vy = msg->twist.linear.y;
-      float vz = msg->twist.linear.z;
-      float ax = msg->acc.x;
-      float ay = msg->acc.y;
-      float az = msg->acc.z;
-
-      float qx = msg->pose.orientation.x;
-      float qy = msg->pose.orientation.y;
-      float qz = msg->pose.orientation.z;
-      float qw = msg->pose.orientation.w;
-      float rollRate = msg->twist.angular.x;
-      float pitchRate = msg->twist.angular.y;
-      float yawRate = msg->twist.angular.z;
-
-      m_cf.sendFullStateSetpoint(
-        x, y, z,
-        vx, vy, vz,
-        ax, ay, az,
-        qx, qy, qz, qw,
-        rollRate, pitchRate, yawRate);
-      //ROS_INFO("set a full state setpoint");
-    }
-  }
-
-  // Added by The-SS end
 
   const std::string& frame() const {
     return m_frame;
@@ -495,6 +436,65 @@ public:
     return true;
   }
 
+  void cmdPositionSetpoint(
+    const crazyflie_driver::Position::ConstPtr& msg)
+  {
+    // if(!m_isEmergency) {
+      float x = msg->x;
+      float y = msg->y;
+      float z = msg->z;
+      float yaw = msg->yaw;
+
+      m_cf.sendPositionSetpoint(x, y, z, yaw);
+      // m_sentSetpoint = true;
+    // }
+  }
+
+  void cmdFullStateSetpoint(
+    const crazyflie_driver::FullState::ConstPtr& msg)
+  {
+    //ROS_INFO("got a full state setpoint");
+    // if (!m_isEmergency) {
+      float x = msg->pose.position.x;
+      float y = msg->pose.position.y;
+      float z = msg->pose.position.z;
+      float vx = msg->twist.linear.x;
+      float vy = msg->twist.linear.y;
+      float vz = msg->twist.linear.z;
+      float ax = msg->acc.x;
+      float ay = msg->acc.y;
+      float az = msg->acc.z;
+
+      float qx = msg->pose.orientation.x;
+      float qy = msg->pose.orientation.y;
+      float qz = msg->pose.orientation.z;
+      float qw = msg->pose.orientation.w;
+      float rollRate = msg->twist.angular.x;
+      float pitchRate = msg->twist.angular.y;
+      float yawRate = msg->twist.angular.z;
+
+      m_cf.sendFullStateSetpoint(
+        x, y, z,
+        vx, vy, vz,
+        ax, ay, az,
+        qx, qy, qz, qw,
+        rollRate, pitchRate, yawRate);
+      // m_sentSetpoint = true;
+      //ROS_INFO("set a full state setpoint");
+    // }
+  }
+
+  void cmdStop(
+    const std_msgs::Empty::ConstPtr& msg)
+  {
+     //ROS_INFO("got a stop setpoint");
+    // if (!m_isEmergency) {
+      m_cf.sendStop();
+      // m_sentSetpoint = true;
+      //ROS_INFO("set a stop setpoint");
+    // }
+  }
+
   void run(
     ros::CallbackQueue& queue)
   {
@@ -596,6 +596,17 @@ public:
       }
   }
 
+  void onConsole(const char* msg) {
+    static std::string messageBuffer;
+    messageBuffer += msg;
+    size_t pos = messageBuffer.find('\n');
+    if (pos != std::string::npos) {
+      messageBuffer[pos] = 0;
+      ROS_INFO_NAMED(m_tf_prefix, "CF Console: %s", messageBuffer.c_str());
+      messageBuffer.erase(0, pos+1);
+    }
+  }
+
   void onLogCustom(uint32_t time_in_ms, std::vector<double>* values, void* userData) {
 
     ros::Publisher* pub = reinterpret_cast<ros::Publisher*>(userData);
@@ -639,8 +650,18 @@ public:
     m_cf.setParam<uint8_t>(entry->id, 1);
 
     // kalmanUSC might not be part of the firmware
-    entry = m_cf.getParamTocEntry("kalmanUSC", "rstWithExtPos");
+    entry = m_cf.getParamTocEntry("kalmanUSC", "resetEstimation");
     if (entry) {
+      m_cf.startSetParamRequest();
+      entry = m_cf.getParamTocEntry("kalmanUSC", "initialX");
+      m_cf.addSetParam(entry->id, x);
+      entry = m_cf.getParamTocEntry("kalmanUSC", "initialY");
+      m_cf.addSetParam(entry->id, y);
+      entry = m_cf.getParamTocEntry("kalmanUSC", "initialZ");
+      m_cf.addSetParam(entry->id, z);
+      m_cf.setRequestedParams();
+
+      entry = m_cf.getParamTocEntry("kalmanUSC", "resetEstimation");
       m_cf.setParam<uint8_t>(entry->id, 1);
     }
 
@@ -648,16 +669,14 @@ public:
   }
 
 private:
-  Crazyflie m_cf;
   std::string m_tf_prefix;
+  Crazyflie m_cf;
   std::string m_frame;
   std::string m_worldFrame;
   bool m_enableParameters;
   bool m_enableLogging;
   int m_id;
   std::string m_type;
-  bool m_sentSetpoint; // Added by The-SS
-  bool m_isEmergency; // Added by The-SS
 
   ros::ServiceServer m_serviceUpdateParams;
   ros::ServiceServer m_serviceUploadTrajectory;
@@ -667,10 +686,9 @@ private:
   ros::ServiceServer m_serviceGoTo;
   ros::ServiceServer m_serviceSetGroupMask;
 
-  // Added by The-SS begin
-  ros::Subscriber m_subscribeCmdStop;
+  ros::Subscriber m_subscribeCmdPosition;
   ros::Subscriber m_subscribeCmdFullState;
-  // Added by The-SS end
+  ros::Subscriber m_subscribeCmdStop;
 
   std::vector<crazyflie_driver::LogBlock> m_logBlocks;
   std::vector<ros::Publisher> m_pubLogDataGeneric;
@@ -769,7 +787,10 @@ public:
 
     if (m_useMotionCaptureObjectTracking) {
       for (auto cf : m_cfs) {
-        publishRigidBody(cf->frame(), cf->id(), states);
+        bool found = publishRigidBody(cf->frame(), cf->id(), states);
+        if (found) {
+          cf->initializePositionIfNeeded(states.back().x, states.back().y, states.back().z);
+        }
       }
     } else {
       // run object tracker
@@ -875,6 +896,7 @@ public:
 
   void emergency()
   {
+    m_cfbc.emergencyStop();
     m_isEmergency = true;
   }
 
@@ -890,6 +912,14 @@ public:
   {
     // for (size_t i = 0; i < 10; ++i) {
       m_cfbc.land(height, duration, groupMask);
+      // std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // }
+  }
+
+  void goTo(float x, float y, float z, float yaw, float duration, uint8_t groupMask)
+  {
+    // for (size_t i = 0; i < 10; ++i) {
+      m_cfbc.goTo(x, y, z, yaw, duration, groupMask);
       // std::this_thread::sleep_for(std::chrono::milliseconds(1));
     // }
   }
@@ -973,7 +1003,7 @@ public:
 
 private:
 
-  void publishRigidBody(const std::string& name, uint8_t id, std::vector<CrazyflieBroadcaster::externalPose> &states)
+  bool publishRigidBody(const std::string& name, uint8_t id, std::vector<CrazyflieBroadcaster::externalPose> &states)
   {
     bool found = false;
     for (const auto& rigidBody : *m_pMocapObjects) {
@@ -1003,7 +1033,7 @@ private:
         transform.setRotation(q);
         m_br.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "world", name));
         found = true;
-        break;
+        return true;
       }
 
     }
@@ -1011,6 +1041,7 @@ private:
     if (!found) {
       ROS_WARN("No updated pose for motion capture object %s", name.c_str());
     }
+    return false;
   }
 
 
@@ -1059,7 +1090,8 @@ private:
         nGlobal.getParam("crazyflieTypes/" + type + "/markerConfiguration", markerConfigurationIdx);
         int dynamicsConfigurationIdx;
         nGlobal.getParam("crazyflieTypes/" + type + "/dynamicsConfiguration", dynamicsConfigurationIdx);
-        objects.push_back(libobjecttracker::Object(markerConfigurationIdx, dynamicsConfigurationIdx, m));
+        std::string name = "cf" + std::to_string(id);
+        objects.push_back(libobjecttracker::Object(markerConfigurationIdx, dynamicsConfigurationIdx, m, name));
 
         std::stringstream sstr;
         sstr << std::setfill ('0') << std::setw(2) << std::hex << id;
@@ -1185,8 +1217,14 @@ private:
             double b = value;
             nGlobal.setParam(cf->frame() + "/" + group + "/" + param, b);
             std::cout << "update " << group + "/" + param << " to " << b << std::endl;
+          } else if (value.getType() == XmlRpc::XmlRpcValue::TypeString) {
+            // "1e-5" is not recognize as double; convert manually here
+            std::string value_str = value;
+            double value = std::stod(value_str);
+            nGlobal.setParam(cf->frame() + "/" + group + "/" + param, value);
+            std::cout << "update " << group + "/" + param << " to " << value << std::endl;
           } else {
-            ROS_WARN("No known type for %s.%s!", group.c_str(), param.c_str());
+            ROS_ERROR("No known type for %s.%s! (type: %d)", group.c_str(), param.c_str(), value.getType());
           }
           request.params.push_back(group + "/" + param);
 
@@ -1226,6 +1264,7 @@ public:
     , m_serviceStartTrajectory()
     , m_serviceTakeoff()
     , m_serviceLand()
+    , m_serviceGoTo()
     , m_serviceNextPhase()
     , m_lastInteractiveObjectPosition(-10, -10, 1)
     , m_broadcastingNumRepeats(15)
@@ -1238,6 +1277,7 @@ public:
     m_serviceStartTrajectory = nh.advertiseService("start_trajectory", &CrazyflieServer::startTrajectory, this);
     m_serviceTakeoff = nh.advertiseService("takeoff", &CrazyflieServer::takeoff, this);
     m_serviceLand = nh.advertiseService("land", &CrazyflieServer::land, this);
+    m_serviceGoTo = nh.advertiseService("go_to", &CrazyflieServer::goTo, this);
 
     m_serviceNextPhase = nh.advertiseService("next_phase", &CrazyflieServer::nextPhase, this);
     // m_serviceUpdateParams = nh.advertiseService("update_params", &CrazyflieServer::updateParams, this);
@@ -1369,6 +1409,20 @@ public:
     libmotioncapture::MotionCapture* mocap = nullptr;
     if (motionCaptureType == "none")
     {
+    } else if (motionCaptureType == "test")
+    {
+        std::vector<libmotioncapture::Object> objects;
+        pcl::PointCloud<pcl::PointXYZ>::Ptr pointCloud(new pcl::PointCloud<pcl::PointXYZ>);
+        pointCloud->push_back(pcl::PointXYZ(-0.5, 1.0, 0.0));
+        pointCloud->push_back(pcl::PointXYZ(-0.5, 0.5, 0.0));
+        pointCloud->push_back(pcl::PointXYZ(-0.5, 0.0, 0.0));
+        pointCloud->push_back(pcl::PointXYZ(-0.5, -0.5, 0.0));
+        pointCloud->push_back(pcl::PointXYZ(-0.5, -1.0, 0.0));
+
+        mocap = new libmotioncapture::MotionCaptureTest(
+          0.01,
+          objects,
+          pointCloud);
     }
 #ifdef ENABLE_VICON
     else if (motionCaptureType == "vicon")
@@ -1383,11 +1437,9 @@ public:
 #ifdef ENABLE_OPTITRACK
     else if (motionCaptureType == "optitrack")
     {
-      std::string localIP;
-      std::string serverIP;
-      nl.getParam("optitrack_local_ip", localIP);
-      nl.getParam("optitrack_server_ip", serverIP);
-      mocap = new libmotioncapture::MotionCaptureOptitrack(localIP, serverIP);
+      std::string hostName;
+      nl.getParam("optitrack_host_name", hostName);
+      mocap = new libmotioncapture::MotionCaptureOptitrack(hostName);
     }
 #endif
 #ifdef ENABLE_PHASESPACE
@@ -1413,6 +1465,15 @@ public:
         /*enableObjects*/ true,
         /*enablePointcloud*/ true);
     }
+#endif
+#ifdef ENABLE_VRPN
+  else if (motionCaptureType == "vrpn")
+  {
+    std::string hostname;
+    int port;
+    nl.getParam("vrpn_host_name", hostname);
+    mocap = new libmotioncapture::MotionCaptureVrpn(hostname);
+  }
 #endif
     else {
       throw std::runtime_error("Unknown motion capture type!");
@@ -1655,8 +1716,12 @@ private:
     std_srvs::Empty::Response& res)
   {
     ROS_FATAL("Emergency requested!");
-    for (auto& group : m_groups) {
-      group->emergency();
+
+    for (size_t i = 0; i < m_broadcastingNumRepeats; ++i) {
+      for (auto& group : m_groups) {
+        group->emergency();
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(m_broadcastingDelayBetweenRepeatsMs));
     }
     m_isEmergency = true;
 
@@ -1688,6 +1753,22 @@ private:
     for (size_t i = 0; i < m_broadcastingNumRepeats; ++i) {
       for (auto& group : m_groups) {
         group->land(req.height, req.duration.toSec(), req.groupMask);
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(m_broadcastingDelayBetweenRepeatsMs));
+    }
+
+    return true;
+  }
+
+  bool goTo(
+    crazyflie_driver::GoTo::Request& req,
+    crazyflie_driver::GoTo::Response& res)
+  {
+    ROS_INFO("GoTo!");
+
+    for (size_t i = 0; i < m_broadcastingNumRepeats; ++i) {
+      for (auto& group : m_groups) {
+        group->goTo(req.goal.x, req.goal.y, req.goal.z, req.yaw, req.duration.toSec(), req.groupMask);
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(m_broadcastingDelayBetweenRepeatsMs));
     }
@@ -1816,6 +1897,7 @@ private:
   ros::ServiceServer m_serviceStartTrajectory;
   ros::ServiceServer m_serviceTakeoff;
   ros::ServiceServer m_serviceLand;
+  ros::ServiceServer m_serviceGoTo;
   ros::ServiceServer m_serviceNextPhase;
   ros::ServiceServer m_serviceUpdateParams;
 
@@ -1877,7 +1959,6 @@ int main(int argc, char **argv)
   }
 
   // ROS_INFO("All CFs are ready!");
-
   server.run();
 
   return 0;
